@@ -17,6 +17,9 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains import create_history_aware_retriever
 from langchain_core.prompts import MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
+import os
+import glob
+from splitting import parse_functions
 
 
 # initial llm model
@@ -102,101 +105,114 @@ Aim for clarity and completeness in your explanation, addressing both basic func
 [/INST]
 The factorial function calculates the factorial of a non-negative integer n. Factorial is defined as the product of all positive integers less than or equal to n. The function begins with a base case check: if n equals 0, it returns 1. This handles the termination condition of the recursive function, ensuring that factorial(0) returns 1, a fundamental rule in factorial mathematics. For any other positive integer n, the function recursively calls itself with n-1, multiplying n by the result of factorial(n-1). This recursion continues until reaching the base case, at which point it returns up the call stack, computing the factorial by multiplying successive integers. The function’s recursive nature efficiently computes factorials but requires careful handling of large values to avoid stack overflow in some programming environments.</s>
 </s>
-[INST]Explain {input} to me in detail, given its implementation in code {code} [/INST]
+[INST]Explain {input} to me in detail, given its implementation in code {code} and its local callees with respective implementations {callees} [/INST]
 """
 )
 
 output_parser = StrOutputParser()
 
-def call_llm(llm, user_input_code_name, mode):
-  chain = get_llm_chain(mode)
-  # get code name and code
-  chain.invoke({"input": "{code_name}", "code": "{code}"})
-  
+def call_llm(func, mode):
+    print(func)
+    chain = get_llm_chain(mode)
+    print(chain.invoke({"input": func[0], "code": func[3], "callees": func[4]}))
+    
 def get_llm_chain(mode):
-  chain = prompt_explainer | llm | output_parser
-  if mode == "specification":
-    chain = prompt_specification | llm | output_parser
-  return chain
+    chain = None
+    if mode == "explanation":
+        chain = prompt_explainer | llm | output_parser
+    if mode == "specification":
+        chain = prompt_specification | llm | output_parser
+    return chain
 
-loader = DirectoryLoader('../', glob="**/*.py", show_progress=True, show_progress=True, loader_cls=PythonLoader, recursive=True) # loads python source codes recursively from directory. Maybe default to TextLoader
-# use other json + html + pdf + markdown loaders?
+def process_all_python_files(directory):
+    python_files = glob.glob(os.path.join(directory, '*.py'), recursive=True) # !!!
+    for file in python_files:
+        functions, source_code = parse_functions(file)
+        print(f"Functions in {file}:")
+        for function in functions:
+            print(f" - {function[0]} (lines {function[1]}-{function[2]})")
+            call_llm(function, 'specification')
+            
+process_all_python_files('.')
 
-docs = loader.load()
+# loader = DirectoryLoader('../', glob="**/*.py", show_progress=True, loader_cls=PythonLoader, recursive=True) # loads python source codes recursively from directory. Maybe default to TextLoader
+# # use other json + html + pdf + markdown loaders?
 
-# check how many files, do something with it
-print(len(docs))
+# docs = loader.load()
 
-
-# specify which embedding model to use
-embeddings = OllamaEmbeddings()
-
-# split by class and function
-separators = ['\nclass', '\ndef']
-splitter = RecursiveCharacterTextSplitter(separators=separators)
-
-# from_tiktoken, from_hugging_face...
-splitter = splitter.from_language(
-    language=Language.PYTHON, chunk_size=50, chunk_overlap=0
-)
-
-
-documents = splitter.split_documents(docs)
-vector = FAISS.from_documents(documents, embeddings)
-
-from langchain.chains.combine_documents import create_stuff_documents_chain
-
-prompt = ChatPromptTemplate.from_template("""Answer the following question based only on the provided context:
-
-<context>
-{context}
-</context>
-
-Question: {input}""")
-
-# document_chain = llm | prompt
-document_chain = create_stuff_documents_chain(llm, prompt)
-retriever = vector.as_retriever()
-
-# retriever_chain = llm | prompt | retriever
-retrieval_chain = create_retrieval_chain(retriever, document_chain)
-
-# can only answer single question, good for function specific questions
-response = retrieval_chain.invoke({"input": "what is this function Main()"})
-print(response["answer"])
+# # check how many files, do something with it
+# print(len(docs))
 
 
+# # specify which embedding model to use
+# embeddings = OllamaEmbeddings()
 
-# history aware
-# First we need a prompt that we can pass into an LLM to generate this search query
+# # split by class and function
+# separators = ['\nclass', '\ndef']
+# splitter = RecursiveCharacterTextSplitter(separators=separators)
 
-prompt = ChatPromptTemplate.from_messages([
-    MessagesPlaceholder(variable_name="chat_history"),
-    ("user", "{input}"),
-    ("user", "Given the above conversation, generate a search query to look up to get information relevant to the conversation")
-])
+# # from_tiktoken, from_hugging_face...
+# splitter = splitter.from_language(
+#     language=Language.PYTHON, chunk_size=50, chunk_overlap=0
+# )
 
-# retriever_chain = llm | retriever | prompt?
-retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
 
-chat_history = [HumanMessage(content="function name"), AIMessage(content="main()")]
-retriever_chain.invoke({
-    "chat_history": chat_history,
-    "input": "Tell me how"
-})
+# documents = splitter.split_documents(docs)
+# vector = FAISS.from_documents(documents, embeddings)
 
-prompt = ChatPromptTemplate.from_messages([
-    ("system", "Answer the user's questions based on the below context:\n\n{context}"),
-    MessagesPlaceholder(variable_name="chat_history"),
-    ("user", "{input}"),
-])
+# from langchain.chains.combine_documents import create_stuff_documents_chain
 
-# new document chain?
-document_chain = create_stuff_documents_chain(llm, prompt)
-retrieval_chain = create_retrieval_chain(retriever_chain, document_chain)
+# prompt = ChatPromptTemplate.from_template("""Answer the following question based only on the provided context:
 
-# end to end
-retrieval_chain.invoke({
-    "chat_history": chat_history,
-    "input": "Tell its implementation"
-})
+# <context>
+# {context}
+# </context>
+
+# Question: {input}""")
+
+# # document_chain = llm | prompt
+# document_chain = create_stuff_documents_chain(llm, prompt)
+# retriever = vector.as_retriever()
+
+# # retriever_chain = llm | prompt | retriever
+# retrieval_chain = create_retrieval_chain(retriever, document_chain)
+
+# # can only answer single question, good for function specific questions
+# response = retrieval_chain.invoke({"input": "what is this function Main()"})
+# print(response["answer"])
+
+
+
+# # history aware
+# # First we need a prompt that we can pass into an LLM to generate this search query
+
+# prompt = ChatPromptTemplate.from_messages([
+#     MessagesPlaceholder(variable_name="chat_history"),
+#     ("user", "{input}"),
+#     ("user", "Given the above conversation, generate a search query to look up to get information relevant to the conversation")
+# ])
+
+# # retriever_chain = llm | retriever | prompt?
+# retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
+
+# chat_history = [HumanMessage(content="function name"), AIMessage(content="main()")]
+# retriever_chain.invoke({
+#     "chat_history": chat_history,
+#     "input": "Tell me how"
+# })
+
+# prompt = ChatPromptTemplate.from_messages([
+#     ("system", "Answer the user's questions based on the below context:\n\n{context}"),
+#     MessagesPlaceholder(variable_name="chat_history"),
+#     ("user", "{input}"),
+# ])
+
+# # new document chain?
+# document_chain = create_stuff_documents_chain(llm, prompt)
+# retrieval_chain = create_retrieval_chain(retriever_chain, document_chain)
+
+# # end to end
+# retrieval_chain.invoke({
+#     "chat_history": chat_history,
+#     "input": "Tell its implementation"
+# })
